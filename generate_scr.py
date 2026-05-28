@@ -2,7 +2,7 @@ import csv
 import os
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-input_file = os.path.join(script_dir, 'B_mod.txt')
+input_file = os.path.join(script_dir, 'B_mod_3.csv')
 output_file = os.path.join(script_dir, 'flange_plotter.scr')
 
 scr_lines = []
@@ -26,6 +26,14 @@ def midpoint(*points):
 def conjugate(pt):
     x, y = pt
     return (x, -y)
+
+def symmetric_diameter_dim(extent, offset):
+        scr_lines.append("DIMLINEAR")
+        scr_lines.append(fmt(extent))
+        scr_lines.append(fmt(conjugate(extent))) # symmetrical diameter
+        scr_lines.append("T") # text edit 
+        scr_lines.append("%%c<>") 
+        scr_lines.append(fmt(((L[0]+offset),(L[1])))) 
 
 
 def add_sysvar(name, value):
@@ -57,18 +65,31 @@ with open(input_file, 'r') as f:
 
     for row in reader:
         flange = row[0]
-        OD   = float(row[1])
-        D1  = float(row[2])
-        D2  = float(row[3])
-        d_b = float(row[4])
-        b   = float(row[5])
-        h   = float(row[6])
-        d   = float(row[7])
-        n   = int(row[8])
-        bolt_size = row[9]
+        d_b   = float(row[1])
+        b  = float(row[2])
+        OD  = float(row[3])
+        D1 = float(row[4])
+        d   = float(row[5])
+        n   = int(row[6])
+        bolt_size   = row[7]
+        D2   = float(row[8])
+        h = float(row[9])
 
         sx = startpos_x
         sy = startpos_y
+
+        base_text_height = 3.5 
+        gost_scales = [1, 2, 2.5, 4, 5, 10, 15, 20]
+        
+        #find scale which fits in 120 space
+        dimscale = 1  # Default to 1:1
+        for scale in gost_scales:
+            if OD / scale <= 120.0:
+                dimscale = scale
+                break
+        
+        #set global dimscale to the correct one
+        add_sysvar("DIMSCALE", dimscale)
 
         # Calculate points with startpos offset
         A =  (sx,         sy)
@@ -108,7 +129,7 @@ with open(input_file, 'r') as f:
 
         #Write title 
         scr_lines.append("TEXT")
-        scr_lines.append(fmt((sx, max_y + 100)))
+        scr_lines.append(fmt((sx, max_y + 100*dimscale)))
         scr_lines.append("14")
         scr_lines.append("0")
         scr_lines.append(flange)
@@ -116,7 +137,7 @@ with open(input_file, 'r') as f:
 
         #--- Draw line segments
 
-        # Chain 1: A -> H -> B -> C -> D -> E  (segments HB, BC, CD, DE)
+        #  A -> H -> B -> C -> D -> E
         scr_lines.append("LINE")
         scr_lines.append(fmt(A))
         scr_lines.append(fmt(H))
@@ -126,19 +147,19 @@ with open(input_file, 'r') as f:
         scr_lines.append(fmt(E))
         scr_lines.append("")  # Enter to end LINE command
 
-        # Chain 2: G -> F  (segment GF)
+        #  G -> F
         scr_lines.append("LINE")
         scr_lines.append(fmt(G))
         scr_lines.append(fmt(F))
         scr_lines.append("")  # Enter to end LINE command
 
-        # Chain 3: I -> L  (segment IL)
+        #  I -> L 
         scr_lines.append("LINE")
         scr_lines.append(fmt(I))
         scr_lines.append(fmt(L))
         scr_lines.append("")  # Enter to end LINE command
 
-        # Chain 3: D -> F -> K -> J -> I -> H
+        #  D -> F -> K -> J -> I -> H
         overlap = K[1] - F[1]
         if overlap > 0:
             # Overlap case: skip the FK segment
@@ -173,12 +194,17 @@ with open(input_file, 'r') as f:
         scr_lines.append("CENTERLINE")
         scr_lines.append(fmt(midpoint(E, D)))
         scr_lines.append(fmt(midpoint(G, F)))
-
+        
         # Hatching 
-        scr_lines.append("HATCH")
+        add_sysvar("HPNAME", "ANSI31")
+        add_sysvar("HPSCALE", 40*dimscale)
+        add_sysvar("HPANG", 0)
+
+        scr_lines.append("-HATCH")
         scr_lines.append(fmt(midpoint(B,C,D,E)))
         scr_lines.append(fmt(midpoint(F,G,H,I)))
         scr_lines.append("")   
+        
 
         # --- Mirror across x-axis 
         scr_lines.append("MIRROR")
@@ -195,8 +221,77 @@ with open(input_file, 'r') as f:
         scr_lines.append(fmt(midpoint(H, I)))
         scr_lines.append(fmt(midpoint(conjugate(H), conjugate(I))))
 
+        # DIMS
+        SPACING = 30+3.5*dimscale
+
+        # main symmetric
+        symmetric_diameter_dim(I, SPACING)
+        symmetric_diameter_dim(J, 2*SPACING)
+        symmetric_diameter_dim(midpoint(D,F),3*SPACING)
+        symmetric_diameter_dim(C,4*SPACING)
+
+        # bolt 
+        scr_lines.append("DIMLINEAR")
+        scr_lines.append(fmt(E))
+        scr_lines.append(fmt(G)) 
+        scr_lines.append("T") # text edit 
+        scr_lines.append(f"%%c<> for {bolt_size}\X{n} holes") 
+        temp = midpoint(E,G)
+        scr_lines.append(fmt(((temp[0]-SPACING),(temp[1])))) 
+
+        # thickness b and h
+        scr_lines.append("DIMLINEAR") 
+        scr_lines.append(fmt(conjugate(B))) # main flange thickness
+        scr_lines.append(fmt(conjugate(C))) 
+        temp = midpoint(conjugate(B),conjugate(C))
+        scr_lines.append(fmt(((temp[0]),(temp[1]-2*SPACING)))) 
+
+        scr_lines.append("DIMLINEAR")
+        scr_lines.append(fmt(conjugate(C))) #chamfer dim
+        scr_lines.append(fmt(conjugate(J))) 
+        scr_lines.append("T") # text edit 
+        scr_lines.append(f"<>x45%%d") 
+        temp = (conjugate(C)[0] + h/2, conjugate(C)[1])
+        scr_lines.append(fmt(((temp[0]),(temp[1]-SPACING)))) 
+
+        # leader
+        scr_lines.append("LEADER")
+        scr_lines.append(fmt(midpoint(I,J)))
+        scr_lines.append(fmt((J[0]+SPACING*1.5,(OD/2)+SPACING/2)))
+        scr_lines.append("")
+        scr_lines.append("Ra 12,5")
+        scr_lines.append("")
+
+        # Roughness symbol 
+        SIDELENGTH = 14*dimscale
+        r = (J[0]+SPACING*1.5+102*dimscale,(OD/2)+SPACING/2+5*dimscale)
+
+        """
+        scr_lines.append("LINE")
+        scr_lines.append(fmt(r))
+        scr_lines.append(f"@{SIDELENGTH},0")
+        scr_lines.append("")
+        """
+        h = SIDELENGTH * (3**0.5 / 2)
+
+        p_left = (r[0] - SIDELENGTH / 2, r[1] + h)
+        p_right = (r[0] + SIDELENGTH / 2, r[1] + h)
+        p_ext = (r[0] + SIDELENGTH, r[1] + 2 * h)
+
+        scr_lines.append("LINE")
+        scr_lines.append(fmt(p_left))
+        scr_lines.append(fmt(r))
+        scr_lines.append(fmt(p_ext))
+        scr_lines.append("")
+
+        scr_lines.append("LINE")
+        scr_lines.append(fmt(p_left))
+        scr_lines.append(fmt(p_right))
+        scr_lines.append("")
+
+
         # Update startpos for next shape
-        startpos_x += 300
+        startpos_x += 1000
 
     # 
     scr_lines.append("ZOOM")
