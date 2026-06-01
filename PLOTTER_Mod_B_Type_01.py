@@ -1,15 +1,12 @@
+## For Mod B., Type 11 GOST flanges
+
 import csv
 import os
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-input_file = os.path.join(script_dir, 'B_mod_3.csv')
-output_file = os.path.join(script_dir, 'flange_plotter.scr')
-
+input_file = os.path.join(script_dir, 'Mod_B_Type_01_Data.csv')
+output_file = os.path.join(script_dir, 'commands.scr')
 scr_lines = []
-
-startpos_x = 0
-startpos_y = 0
-
 
 def fmt(pt):
     """format point as an AutoCAD coordinate string."""
@@ -18,14 +15,13 @@ def fmt(pt):
 
 def midpoint(*points):   
     num_points = len(points)
-    print([p[0] for p in points])
     x_avg = sum(p[0] for p in points) / num_points
     y_avg = sum(p[1] for p in points) / num_points
     return (x_avg, y_avg)
 
-def conjugate(pt):
+def conjugate(pt): # reflects point in mirror line of FLANGE, not x-axis
     x, y = pt
-    return (x, -y)
+    return(x, 2*sy-y)
 
 def symmetric_diameter_dim(extent, offset):
         scr_lines.append("DIMLINEAR")
@@ -35,6 +31,43 @@ def symmetric_diameter_dim(extent, offset):
         scr_lines.append("%%c<>") 
         scr_lines.append(fmt(((L[0]+offset),(L[1])))) 
 
+def draw_roughness_symbol(startpos, sidelength):
+        h = sidelength * (3**0.5 / 2)
+        p_left = (startpos[0] - sidelength / 2, startpos[1] + h)
+        p_right = (startpos[0] + sidelength / 2, startpos[1] + h)
+        p_ext = (startpos[0] + sidelength, startpos[1] + 2 * h)
+
+        scr_lines.append("LINE")
+        scr_lines.append(fmt(p_left))
+        scr_lines.append(fmt(startpos))
+        scr_lines.append(fmt(p_ext))
+        scr_lines.append("")
+
+        scr_lines.append("LINE")
+        scr_lines.append(fmt(p_left))
+        scr_lines.append(fmt(p_right))
+        scr_lines.append("")
+
+def draw_check_mark(startpos, sidelength):
+    x, y = startpos
+    s = sidelength
+
+    def draw_arc(p1, p2, p3):
+        scr_lines.append("ARC")
+        scr_lines.append(fmt(p1))
+        scr_lines.append(fmt(p2))
+        scr_lines.append(fmt(p3))
+
+    # Check mark
+    scr_lines.append("LINE")
+    scr_lines.append(fmt((x - 0.3 * s, y + 0.5 * s)))
+    scr_lines.append(fmt((x - 0.1 * s, y + 0.3 * s)))
+    scr_lines.append(fmt((x + 0.4 * s, y + 0.8 * s)))
+    scr_lines.append("")
+
+    #brackets
+    draw_arc((x - 0.7 * s, y + s), (x - 0.95 * s, y + 0.5 * s), (x - 0.7 * s, y))
+    draw_arc((x + 0.7 * s, y + s), (x + 0.95 * s, y + 0.5 * s), (x + 0.7 * s, y))
 
 def add_sysvar(name, value):
     """Add a system variable setting to the script.
@@ -47,23 +80,28 @@ def add_sysvar(name, value):
 
 with open(input_file, 'r') as f:
     reader = csv.reader(f)
-    header = next(reader)  # Skip header
+    header = next(reader)#skip header
 
 
-    # Disable smooth view transitions
+    # random settings to make the script be able to do everything itself
     add_sysvar("VTENABLE", 0)
-    #disable Dynamic Input
     add_sysvar("DYNMODE", 0)
-    #disable command echo
     add_sysvar("CMDECHO", 0)
-    #disable object snaps
     add_sysvar("OSMODE", 0)
-    
+    add_sysvar("ATTDIA", 0)
+    add_sysvar("ATTREQ", 1)
     scr_lines.append("VIEWRES")
     scr_lines.append("Y")
     scr_lines.append("20000")
+    scr_lines.append("TEXTSTYLE")
+    scr_lines.append("ROMANS")
 
+    START_DRAWING_POSITION = (0,0)
+    gx, gy = START_DRAWING_POSITION # this is the bottom left hand corner of the current drawing
+
+    #start reading individual flanges here
     for row in reader:
+
         flange = row[0]
         d_b   = float(row[1])
         b  = float(row[2])
@@ -74,22 +112,27 @@ with open(input_file, 'r') as f:
         bolt_size   = row[7]
         D2   = float(row[8])
         h = float(row[9])
-
-        sx = startpos_x
-        sy = startpos_y
-
-        base_text_height = 3.5 
+        """ 
+        if flange != "DN450 PN6":
+             continue
+        """
         gost_scales = [1, 2, 2.5, 4, 5, 10, 15, 20]
         
-        #find scale which fits in 120 space
+        #find a scale which fits in the space
         dimscale = 1  # Default to 1:1
         for scale in gost_scales:
-            if OD / scale <= 120.0:
+            if OD / scale <= 115.0:
                 dimscale = scale
                 break
         
         #set global dimscale to the correct one
         add_sysvar("DIMSCALE", dimscale)
+        add_sysvar("LTSCALE", 1/dimscale)
+
+        gx += 200*dimscale # update in halves like this so it looks pretty 
+
+        sx = gx + 105*dimscale
+        sy = gy + 220*dimscale
 
         # Calculate points with startpos offset
         A =  (sx,         sy)
@@ -116,8 +159,6 @@ with open(input_file, 'r') as f:
         sel_y2 = max_y + 1
 
         #Zoom to the area for this flange
-
-
         scr_lines.append("ZOOM")
         scr_lines.append("W")
         scr_lines.append(fmt((sel_x1, -(max_y + 1))))
@@ -129,10 +170,10 @@ with open(input_file, 'r') as f:
 
         #Write title 
         scr_lines.append("TEXT")
-        scr_lines.append(fmt((sx, max_y + 100*dimscale)))
-        scr_lines.append("14")
+        scr_lines.append(fmt((gx+75, gy + 305*dimscale)))
+        scr_lines.append(f"{20*dimscale}")
         scr_lines.append("0")
-        scr_lines.append(flange)
+        scr_lines.append(f"{flange}")
         scr_lines.append("\n\n")
 
         #--- Draw line segments
@@ -189,15 +230,10 @@ with open(input_file, 'r') as f:
         #Change to DIM layer
         scr_lines.append("CLAYER")
         scr_lines.append("DIM")
-
-        # Bolt Centerlines
-        scr_lines.append("CENTERLINE")
-        scr_lines.append(fmt(midpoint(E, D)))
-        scr_lines.append(fmt(midpoint(G, F)))
         
         # Hatching 
         add_sysvar("HPNAME", "ANSI31")
-        add_sysvar("HPSCALE", 40*dimscale)
+        add_sysvar("HPSCALE", 10*dimscale)
         add_sysvar("HPANG", 0)
 
         scr_lines.append("-HATCH")
@@ -206,23 +242,77 @@ with open(input_file, 'r') as f:
         scr_lines.append("")   
         
 
-        # --- Mirror across x-axis 
+        # --- Mirror 
         scr_lines.append("MIRROR")
         scr_lines.append("C")                          # Crossing selection
         scr_lines.append(fmt((sel_x1, sel_y1)))         # First corner
         scr_lines.append(fmt((sel_x2, sel_y2)))         # Opposite corner
         scr_lines.append("")                            # Enter to end selection
-        scr_lines.append(fmt((sx, 0)))                  # First point of mirror line (x-axis)
-        scr_lines.append(fmt((sx + 1, 0)))              # Second point of mirror line
+        scr_lines.append(fmt((sx, sy)))                  # First point of mirror line (x-axis)
+        scr_lines.append(fmt((sx + 1, sy)))              # Second point of mirror line
         scr_lines.append("N")                           # Don't erase source objects
 
-        # Main Centerline 
+        # Centerlines 
+        #Change to centerline layer
+        scr_lines.append("CLAYER")
+        scr_lines.append("CENTER")
+        add_sysvar("CELWEIGHT", 5) #scale centerline weight, scale, extension
+        add_sysvar("CENTERLTSCALE", 25*dimscale)
+        add_sysvar("CENTEREXE", 1.0*dimscale)
+
+        #zoom in so it doesn't get fucked up
+        add_sysvar("PICKBOX", 1)
+        groove_margin = 2
+        scr_lines.append("ZOOM")
+        scr_lines.append("W")
+        scr_lines.append(fmt((E[0] - groove_margin, G[1] - groove_margin)))
+        scr_lines.append(fmt((D[0] + groove_margin, D[1] + groove_margin)))
+
+        scr_lines.append("CENTERLINE")
+        scr_lines.append(fmt(midpoint(E, D)))
+        scr_lines.append(fmt(midpoint(G, F)))
+
+        # bottom half
+        cE = conjugate(E); cD = conjugate(D)
+        cG = conjugate(G); cF = conjugate(F)
+        scr_lines.append("ZOOM")
+        scr_lines.append("W")
+        scr_lines.append(fmt((cE[0] - groove_margin, min(cE[1], cG[1]) - groove_margin)))
+        scr_lines.append(fmt((cD[0] + groove_margin, max(cD[1], cG[1]) + groove_margin)))
+
+        scr_lines.append("CENTERLINE")
+        scr_lines.append(fmt(midpoint(cE, cD)))
+        scr_lines.append(fmt(midpoint(cG, cF)))
+
+        # main centerline
+        cH = conjugate(H); cI = conjugate(I)
+        scr_lines.append("ZOOM")
+        scr_lines.append("W")
+        scr_lines.append(fmt((H[0] - groove_margin, min(H[1], cH[1]) - groove_margin)))
+        scr_lines.append(fmt((I[0] + groove_margin, max(H[1], cH[1]) + groove_margin)))
+
         scr_lines.append("CENTERLINE")
         scr_lines.append(fmt(midpoint(H, I)))
-        scr_lines.append(fmt(midpoint(conjugate(H), conjugate(I))))
+        scr_lines.append(fmt(midpoint(cH, cI)))
+
+        #zoom back out
+        add_sysvar("PICKBOX", 3)
+        scr_lines.append("ZOOM")
+        scr_lines.append("W")
+        scr_lines.append(fmt((sel_x1, -(max_y + 1))))
+        scr_lines.append(fmt((sel_x2, sel_y2)))
+        
+        #reset to default for hatch and dims
+        add_sysvar("CELWEIGHT", -1) 
+        add_sysvar("CELTSCALE", 1)
+
+        ###
+        scr_lines.append("CLAYER") # switch back 
+        scr_lines.append("DIM")
+
 
         # DIMS
-        SPACING = 30+3.5*dimscale
+        SPACING = 6.5*dimscale
 
         # main symmetric
         symmetric_diameter_dim(I, SPACING)
@@ -252,46 +342,69 @@ with open(input_file, 'r') as f:
         scr_lines.append("T") # text edit 
         scr_lines.append(f"<>x45%%d") 
         temp = (conjugate(C)[0] + h/2, conjugate(C)[1])
-        scr_lines.append(fmt(((temp[0]),(temp[1]-SPACING)))) 
+        scr_lines.append(fmt(((temp[0]),(temp[1]-1*SPACING)))) 
 
         # leader
         scr_lines.append("LEADER")
         scr_lines.append(fmt(midpoint(I,J)))
-        scr_lines.append(fmt((J[0]+SPACING*1.5,(OD/2)+SPACING/2)))
+        q = (J[0]+SPACING*1.5,sy+(OD/2)+SPACING/2)
+        scr_lines.append(fmt(q))
         scr_lines.append("")
         scr_lines.append("Ra 12,5")
         scr_lines.append("")
 
-        # Roughness symbol 
-        SIDELENGTH = 14*dimscale
-        r = (J[0]+SPACING*1.5+102*dimscale,(OD/2)+SPACING/2+5*dimscale)
+        # roughness symbol (face)
+        SIDELENGTH = 3.5*dimscale
+        r = (q[0]+25*dimscale,q[1]+1.25*dimscale)
+        draw_roughness_symbol(r, SIDELENGTH)
 
-        """
-        scr_lines.append("LINE")
-        scr_lines.append(fmt(r))
-        scr_lines.append(f"@{SIDELENGTH},0")
-        scr_lines.append("")
-        """
-        h = SIDELENGTH * (3**0.5 / 2)
+        # global roughness 
+        scr_lines.append("TEXT")
+        p = (gx+165*dimscale, gy+282.675*dimscale)
+        scr_lines.append(fmt(p))
+        scr_lines.append(f"{3.5*dimscale}")
+        scr_lines.append("0")
+        scr_lines.append("Rz 100")
+        scr_lines.append("\n\n")
 
-        p_left = (r[0] - SIDELENGTH / 2, r[1] + h)
-        p_right = (r[0] + SIDELENGTH / 2, r[1] + h)
-        p_ext = (r[0] + SIDELENGTH, r[1] + 2 * h)
-
-        scr_lines.append("LINE")
-        scr_lines.append(fmt(p_left))
-        scr_lines.append(fmt(r))
-        scr_lines.append(fmt(p_ext))
-        scr_lines.append("")
-
-        scr_lines.append("LINE")
-        scr_lines.append(fmt(p_left))
-        scr_lines.append(fmt(p_right))
-        scr_lines.append("")
-
+        #symbols
+        draw_roughness_symbol((p[0] + 24.75*dimscale, p[1]), SIDELENGTH)
+        draw_check_mark((p[0] + 33*dimscale, p[1]), SIDELENGTH*1.25)
+        
+        #drawing template
+        scr_lines.append("-INSERT")
+        scr_lines.append("gost_flange_template")  
+        scr_lines.append(fmt((gx, gy))) # corner in bottom left at relative 0,0     
+        
+        #scale it
+        scr_lines.append(str(dimscale))            # x
+        scr_lines.append(str(dimscale))            # Y 
+        scr_lines.append("0")       # rotation
+        
+        #attributes
+        scr_lines.append(f"{flange[0:5]}, {flange[6:]} Type01 Mod.B - GOST 33259-2015")
+        scr_lines.append(f"{flange[0:5]}, {flange[6:]} Тип01 Исп.B - ГОСТ 33259-2015")
+        scr_lines.append(f"1:{dimscale}")    #scale
+        scr_lines.append(f"{flange[2:5]}-{flange[8:]}-01-B-09G2S GOST 33259-2015")
+        
+        #name
+        scr_lines.append("TEXT")
+        scr_lines.append(fmt((gx-0*dimscale, gy-5*dimscale)))
+        scr_lines.append(f"{3.5*dimscale}")
+        scr_lines.append("0")
+        scr_lines.append("K. Flores")
+        scr_lines.append("\n\n")
 
         # Update startpos for next shape
-        startpos_x += 1000
+        gx += 200*dimscale
+    
+    #series label
+    scr_lines.append("TEXT")
+    scr_lines.append(fmt(START_DRAWING_POSITION))
+    scr_lines.append(f"{500}")
+    scr_lines.append("90")
+    scr_lines.append("Mod. B Type 01")
+    scr_lines.append("\n\n")
 
     # 
     scr_lines.append("ZOOM")
@@ -303,8 +416,7 @@ with open(input_file, 'r') as f:
 
 # Write .scr file
 #join with newlines
-with open(output_file, 'w') as f:
+with open(output_file, 'w', encoding='utf-8-sig') as f:
     f.write('\n'.join(scr_lines))
     f.write('\n')  # Single trailing newline to execute the last command
 
-print(f"Generated {output_file}")
