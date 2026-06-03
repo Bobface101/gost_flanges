@@ -1,5 +1,5 @@
 ## For Mod B., Type 01 GOST flanges
-
+import math
 import csv
 import os
 
@@ -13,6 +13,11 @@ def fmt(pt):
     x, y = pt
     return f"{x:g},{y:g}"
 
+def lengthof(p1, p2):
+     x1,y1 = p1
+     x2,y2 = p2
+     return ((x1-x2)**2 + (y1-y2)**2)**0.5
+
 def midpoint(*points):   
     num_points = len(points)
     x_avg = sum(p[0] for p in points) / num_points
@@ -23,13 +28,25 @@ def conjugate(pt): # reflects point in mirror line of FLANGE, not x-axis
     x, y = pt
     return(x, 2*sy-y)
 
-def symmetric_diameter_dim(extent, offset):
+def symmetric_diameter_dim(extent, offset, point_on_face):
         scr_lines.append("DIMLINEAR")
         scr_lines.append(fmt(extent))
         scr_lines.append(fmt(conjugate(extent))) # symmetrical diameter
         scr_lines.append("T") # text edit 
         scr_lines.append("%%c<>") 
-        scr_lines.append(fmt(((L[0]+offset),(L[1])))) 
+        scr_lines.append(fmt(((point_on_face[0]+offset),(sy)))) 
+
+def linear_dim(p1, p2, placement, text_override=None):
+    scr_lines.append("DIMLINEAR")
+    scr_lines.append(fmt(p1))
+    scr_lines.append(fmt(p2)) 
+
+    # Only inject the "T" command if a string was actually passed in
+    if text_override is not None:
+        scr_lines.append("T") 
+        scr_lines.append(text_override) 
+
+    scr_lines.append(fmt(placement))
 
 def draw_roughness_symbol(startpos, sidelength):
         h = sidelength * (3**0.5 / 2)
@@ -90,11 +107,13 @@ with open(input_file, 'r') as f:
     add_sysvar("OSMODE", 0)
     add_sysvar("ATTDIA", 0)
     add_sysvar("ATTREQ", 1)
+    add_sysvar("DIMJUST",0)
     scr_lines.append("VIEWRES")
     scr_lines.append("Y")
     scr_lines.append("20000")
     scr_lines.append("TEXTSTYLE")
     scr_lines.append("ROMANS")
+
 
     START_DRAWING_POSITION = (0,-30000)
     gx, gy = START_DRAWING_POSITION # this is the bottom left hand corner of the current drawing
@@ -117,6 +136,7 @@ with open(input_file, 'r') as f:
         bolt_size   = row[11]
         D2   = float(row[12])
         h = float(row[13])
+        fillet_radius = float(row[14])
 
         gost_scales = [1, 2, 2.5, 4, 5, 10, 15, 20]
         
@@ -195,8 +215,7 @@ with open(input_file, 'r') as f:
         #--- Draw line segments
 
         # flange neck here
-        scr_lines.append("LINE")
-        scr_lines.append(fmt(H))
+        scr_lines.append("LINE")   
         scr_lines.append(fmt(S))
         scr_lines.append(fmt(T))
         scr_lines.append(fmt(U))
@@ -225,32 +244,42 @@ with open(input_file, 'r') as f:
         scr_lines.append(fmt(L))
         scr_lines.append("")  # Enter to end LINE command
 
-        #  D -> F -> K -> J -> I -> H
-        overlap = K[1] - F[1]
-        if overlap > 0:
-            # Overlap case: skip the FK segment
-            scr_lines.append("LINE")
-            scr_lines.append(fmt(D))
-            scr_lines.append(fmt(K))
-            scr_lines.append(fmt(J))
-            scr_lines.append(fmt(I))
-            scr_lines.append(fmt(H))
-            scr_lines.append("")  # Enter to end LINE command
+        #  D -> K -> J -> I -> S -> axis
+        scr_lines.append("LINE")
+        scr_lines.append(fmt(D))
+        scr_lines.append(fmt(K))
+        scr_lines.append(fmt(J))
+        scr_lines.append(fmt(I))
+        scr_lines.append(fmt(S))
+        scr_lines.append((fmt((S[0],sy))))
+        scr_lines.append("")  # Enter to end LINE command
 
+       
+        overlap = K[1] - F[1] # need to draw a small line if the bore intersects the chamfer
+        if overlap > 0:
             scr_lines.append("LINE")
             scr_lines.append(fmt(F))
             scr_lines.append(f"@{overlap},0")
-            scr_lines.append("")
-        else:
-            #normal case: no overlap, draw full chain
-            scr_lines.append("LINE")
-            scr_lines.append(fmt(D))
-            scr_lines.append(fmt(F))
-            scr_lines.append(fmt(K))
-            scr_lines.append(fmt(J))
-            scr_lines.append(fmt(I))
-            scr_lines.append(fmt(H))
-            scr_lines.append("")  # Enter to end LINE command
+            scr_lines.append("") 
+
+        #Fillets
+
+        FILLET_RADIUS = lengthof(V, W)/3.5 # I chose 3.5 empirically determined from COMPASS
+        FILLET_RADIUS = round(2*FILLET_RADIUS)/2 # round to nearest 0.5
+
+        scr_lines.append("FILLET")
+        scr_lines.append(fmt(midpoint(U,V)))
+        scr_lines.append("RADIUS")
+        scr_lines.append(f"{FILLET_RADIUS}")
+        scr_lines.append(fmt(midpoint(V,W)))
+
+        scr_lines.append("FILLET")
+        scr_lines.append(fmt(midpoint(V,W)))
+        scr_lines.append("RADIUS")
+        scr_lines.append(f"{FILLET_RADIUS}")
+        scr_lines.append(fmt(midpoint(W,G)))
+        
+
 
         #Change to DIM layer
         scr_lines.append("CLAYER")
@@ -338,12 +367,16 @@ with open(input_file, 'r') as f:
 
         # DIMS
         SPACING = 6.5*dimscale
+        if dimscale == 10:
+             SPACING = 10*dimscale
 
         # main symmetric
-        symmetric_diameter_dim(I, SPACING)
-        symmetric_diameter_dim(J, 2*SPACING)
-        symmetric_diameter_dim(midpoint(D,F),3*SPACING)
-        symmetric_diameter_dim(C,4*SPACING)
+        symmetric_diameter_dim(I, SPACING, L)
+        symmetric_diameter_dim(J, 2*SPACING, L)
+        symmetric_diameter_dim(midpoint(D,F),3*SPACING, L)
+        symmetric_diameter_dim(C,4*SPACING, L)
+        symmetric_diameter_dim(U, -2*SPACING, S)
+        symmetric_diameter_dim(W, b-H_0-3*SPACING, W)
 
         # bolt 
         scr_lines.append("DIMLINEAR")
@@ -351,12 +384,13 @@ with open(input_file, 'r') as f:
         scr_lines.append(fmt(G)) 
         scr_lines.append("T") # text edit 
         scr_lines.append(f"%%c<> for {bolt_size}\X{n} holes") 
-        temp = midpoint(E,G)
-        scr_lines.append(fmt(((temp[0]-SPACING),(temp[1])))) 
+        temp = midpoint(S,conjugate(S))
+        scr_lines.append(fmt(((temp[0]-5*SPACING),(temp[1])))) 
 
-        # thickness b and h
+
+        # thickness b and h, and little one H1
         scr_lines.append("DIMLINEAR") 
-        scr_lines.append(fmt(conjugate(B))) # main flange thickness
+        scr_lines.append(fmt(conjugate(B))) # flange body thickness, excluding neck
         scr_lines.append(fmt(conjugate(C))) 
         temp = midpoint(conjugate(B),conjugate(C))
         scr_lines.append(fmt(((temp[0]),(temp[1]-2*SPACING)))) 
@@ -369,7 +403,138 @@ with open(input_file, 'r') as f:
         temp = (conjugate(C)[0] + h/2, conjugate(C)[1])
         scr_lines.append(fmt(((temp[0]),(temp[1]-1*SPACING)))) 
 
-        # leader
+        scr_lines.append("DIMLINEAR") 
+        scr_lines.append(fmt(conjugate(V))) # H1
+        scr_lines.append(fmt(conjugate(T))) 
+        scr_lines.append(fmt((((T[0]+V[0])/2),(sy-OD/2-SPACING)))) 
+
+        # weld edge lip (neck)
+        scr_lines.append("DIMLINEAR")
+        scr_lines.append(fmt(T)) #chamfer dim
+        scr_lines.append(fmt(S)) 
+        scr_lines.append("T") # text edit 
+        scr_lines.append("<>{\H0.7x;\S+0,5^-0,0;}") 
+        temp = (midpoint(T,S))
+        scr_lines.append(fmt(((temp[0]-0.75*SPACING),(temp[1])))) 
+
+        #full flange body
+        add_sysvar("DIMTIX", 1)    # 1 = Force text inside the extension lines
+        add_sysvar("DIMTAD", 1)    # 1 = Place text Above the line
+        add_sysvar("DIMATFIT", 1)
+        scr_lines.append("DIMLINEAR") 
+        scr_lines.append(fmt((T))) # full flange body
+        scr_lines.append(fmt((C))) 
+        temp = ((T[0]+C[0])/2,C[1])
+        scr_lines.append(fmt(((temp[0]),(temp[1]+SPACING)))) 
+        add_sysvar("DIMTAD", 1)    # 1 = Text ALWAYS on top of the line
+        add_sysvar("DIMTIX", 0)    # 0 = Allows text to pop outside if space is tight
+        add_sysvar("DIMATFIT", 3)  # 3 = "Best Fit" (Kicks text outside if it doesn't fit)
+        add_sysvar("DIMJUST", 0)
+
+        # angular dims - arc placement on bisector of acute sector
+        add_sysvar("DIMTMOVE", 1)
+        arc_r = 1.5 * SPACING
+
+        # first angle at T (neck line vs vertical)
+        ray1_angle = math.atan2(U[1] - T[1], U[0] - T[0])
+        bisector1 = (ray1_angle + math.pi / 2) / 2
+        tight_arc_pt1 = (T[0] + arc_r * math.cos(bisector1),
+                         T[1] + arc_r * math.sin(bisector1))
+
+        scr_lines.append("DIMANGULAR")
+        scr_lines.append("")                         # bypass line selection
+        scr_lines.append(fmt(T))                     # vertex
+        scr_lines.append(fmt(midpoint(T, U)))        # endpoint on neck line
+        scr_lines.append(fmt((T[0], T[1] + 1)))     # endpoint on vertical
+        scr_lines.append("T")
+        scr_lines.append("30%%d")
+        scr_lines.append(fmt(tight_arc_pt1))
+
+        # move text with leader
+        scr_lines.append("DIMTEDIT")
+        scr_lines.append("L")
+        far_away_pt1 = (T[0] - 3 * SPACING, sy + OD / 2 + 1.5 * SPACING)
+        scr_lines.append(fmt(far_away_pt1))
+
+
+        """
+        # --- Second angle: at vertex conjugate(V) (fillet line vs horizontal) ---
+        cV = conjugate(V)
+        cMid_VW = conjugate(midpoint(V, W))
+        
+        # 1. CALCULATE THE EXACT ANGLE IN PYTHON
+        # Using the rise (Dm-Dn) and run of the flange neck coordinates
+        #k = abs(D[0]-V[0])/abs(W[0]-V[0]) # make sure the angle extends up to the face
+        k=1
+        delta_y = k*abs(W[1] - V[1])
+        delta_x = k*abs(W[0] - V[0])
+        angle_deg = math.degrees(math.atan2(delta_y, delta_x))
+        angle_text = f"{round(angle_deg)}%%d" # Creates the string, e.g., "45%%d"
+
+        # Calculate bisector for arc placement (Your existing logic)
+        ray1_angle2 = math.atan2(cMid_VW[1] - cV[1], cMid_VW[0] - cV[0])
+        ray2_angle2 = 0.0
+        r1 = ray1_angle2 % (2 * math.pi)
+        r2 = ray2_angle2 % (2 * math.pi)
+        span_ccw = (r1 - r2) % (2 * math.pi)
+        span_cw = (r2 - r1) % (2 * math.pi)
+        if span_ccw <= span_cw:
+            bisector2 = (r2 + span_ccw / 2) % (2 * math.pi)
+        else:
+            bisector2 = (r1 + span_cw / 2) % (2 * math.pi)
+
+        tight_arc_pt2 = (cV[0] + arc_r * math.cos(bisector2),
+                         cV[1] + arc_r * math.sin(bisector2))
+
+        # 2. DRAW DIMANGULAR BUT HIDE ITS TEXT
+        scr_lines.append("DIMANGULAR")
+        scr_lines.append("")                         
+        scr_lines.append(fmt(cV))                    
+        scr_lines.append(fmt(cMid_VW))               
+        scr_lines.append(fmt((cV[0] + 1, cV[1])))   
+        scr_lines.append("T")
+        scr_lines.append(" ")                        # A single space makes the text invisible!
+        scr_lines.append(fmt(tight_arc_pt2))         
+
+        # 3. DRAW THE PROPER LEADER
+        # You can push this coordinate anywhere you want!
+        far_away_pt2 = (cV[0] - 1.5 * SPACING, cV[1] - 3 * SPACING)
+        add_sysvar("DIMLDRBLK", "_NONE")
+        
+        scr_lines.append("LEADER")
+        scr_lines.append(fmt(tight_arc_pt2))         # Arrowhead starts exactly on the dimension arc
+        scr_lines.append(fmt(far_away_pt2))          # The dogleg kicks out here
+        scr_lines.append("")                         # Enter to end line selection
+        scr_lines.append(angle_text)                 # Inject the mathematically calculated angle!
+        scr_lines.append("")
+        add_sysvar("DIMLDRBLK", ".")
+        """
+        ## Fillets
+        cV = conjugate(V)
+        cW = conjugate(W)
+        shared_text_location = (cV[0] - 2 * SPACING, sy - OD/2)
+
+        scr_lines.append("LEADER")
+        scr_lines.append("NEA")
+        scr_lines.append(fmt(cW))
+        scr_lines.append(fmt(shared_text_location))
+        scr_lines.append("")
+        scr_lines.append(f"R{FILLET_RADIUS}")
+        scr_lines.append("")
+
+        scr_lines.append("LEADER")
+        scr_lines.append("NEA")
+        scr_lines.append(fmt(cV))
+        scr_lines.append(fmt(shared_text_location))
+        scr_lines.append("")
+        scr_lines.append(" ")
+        scr_lines.append("")
+        scr_lines.append("")
+        
+       ##################
+
+
+        # leader1
         scr_lines.append("LEADER")
         scr_lines.append(fmt(midpoint(I,J)))
         q = (J[0]+SPACING*1.5,sy+(OD/2)+SPACING/2)
@@ -377,7 +542,10 @@ with open(input_file, 'r') as f:
         scr_lines.append("")
         scr_lines.append("Ra 12,5")
         scr_lines.append("")
+        add_sysvar("DIMTMOVE", 0)
 
+ 
+        
         # roughness symbol (face)
         SIDELENGTH = 3.5*dimscale
         r = (q[0]+25*dimscale,q[1]+1.25*dimscale)
